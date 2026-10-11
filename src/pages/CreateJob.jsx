@@ -4,15 +4,19 @@ import {
   ArrowLeft,
   User,
   Briefcase,
-  CheckCircle2,
   AlertCircle,
   HelpCircle,
   Hash,
   Mail,
   Phone,
   ShieldAlert,
+  Loader2,
+  Lock,
 } from 'lucide-react';
 import Button from '../components/ui/Button';
+import SupabaseSetupBanner from '../components/ui/SupabaseSetupBanner';
+import { useAuth } from '../context/useAuth';
+import { createJob } from '../services/jobs';
 
 /**
  * Returns today's local date string formatted as YYYY-MM-DD
@@ -27,6 +31,7 @@ function getTodayLocalDate() {
 
 export default function CreateJob() {
   const navigate = useNavigate();
+  const { user, isConfigured } = useAuth();
 
   // Controlled form state
   const [formData, setFormData] = useState({
@@ -40,9 +45,10 @@ export default function CreateJob() {
     internalNotes: '',
   });
 
-  // Validation state
+  // Validation & submission state
   const [errors, setErrors] = useState({});
-  const [successMessage, setSuccessMessage] = useState('');
+  const [submitting, setSubmitting] = useState(false);
+  const [submitError, setSubmitError] = useState('');
 
   const minDate = getTodayLocalDate();
 
@@ -62,8 +68,8 @@ export default function CreateJob() {
       });
     }
 
-    if (successMessage) {
-      setSuccessMessage('');
+    if (submitError) {
+      setSubmitError('');
     }
   };
 
@@ -79,7 +85,6 @@ export default function CreateJob() {
     // 2. Email Address (Optional, validate format only if provided)
     const trimmedEmail = formData.email.trim();
     if (trimmedEmail) {
-      // Standard email regex format validation
       const emailPattern = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
       if (!emailPattern.test(trimmedEmail)) {
         newErrors.email = 'Please enter a valid email address (e.g. customer@example.com).';
@@ -104,7 +109,6 @@ export default function CreateJob() {
       newErrors.quantity = 'Quantity is required.';
     } else {
       const parsedQty = Number(trimmedQuantity);
-      // Ensure positive whole integer (no decimals, no zero, no negative values)
       if (
         !/^\d+$/.test(trimmedQuantity) ||
         !Number.isInteger(parsedQty) ||
@@ -126,15 +130,15 @@ export default function CreateJob() {
     return newErrors;
   };
 
-  const handleSubmit = (e) => {
+  const handleSubmit = async (e) => {
     e.preventDefault();
-    setSuccessMessage('');
+    setSubmitError('');
 
+    // Step 1: Run client-side validation
     const validationErrors = validateForm();
     setErrors(validationErrors);
 
     if (Object.keys(validationErrors).length > 0) {
-      // Focus first invalid field for better accessibility
       const fieldOrder = [
         'customerName',
         'phoneNumber',
@@ -155,13 +159,41 @@ export default function CreateJob() {
       return;
     }
 
-    // Validation succeeded
-    setSuccessMessage(
-      'Form validation successful. Job saving will be enabled in the next step.'
-    );
+    // Step 2: Check configuration & authentication
+    if (!isConfigured) {
+      setSubmitError(
+        'Database connection not configured. Please add your Supabase credentials to .env.'
+      );
+      return;
+    }
 
-    // Scroll to success notification smoothly
-    window.scrollTo({ top: 0, behavior: 'smooth' });
+    if (!user) {
+      setSubmitError('Authentication required: Please sign in before creating a job.');
+      return;
+    }
+
+    // Step 3: Prevent repeated submissions
+    setSubmitting(true);
+
+    try {
+      // Step 4 - 9: Map fields, set owner_id, and insert to Supabase
+      const newJob = await createJob(formData, user.id);
+
+      if (!newJob || !newJob.id) {
+        throw new Error('Database did not return the saved job record.');
+      }
+
+      // Step 10: Navigate to the newly created job's details page
+      navigate(`/jobs/${newJob.id}`);
+    } catch (err) {
+      // Preserve form values, show understandable error, do not navigate
+      setSubmitError(
+        err.message || 'An error occurred while saving the job to the database. Please try again.'
+      );
+      window.scrollTo({ top: 0, behavior: 'smooth' });
+    } finally {
+      setSubmitting(false);
+    }
   };
 
   return (
@@ -190,24 +222,38 @@ export default function CreateJob() {
         </div>
       </div>
 
-      {/* Validation Success Notification */}
-      {successMessage && (
+      {/* Supabase Setup Banner if environment variables are missing */}
+      {!isConfigured && <SupabaseSetupBanner />}
+
+      {/* Unauthenticated Alert */}
+      {isConfigured && !user && (
+        <div className="rounded-xl bg-amber-50 border border-amber-200 p-4 flex items-center justify-between gap-4">
+          <div className="flex items-center gap-3">
+            <Lock className="w-5 h-5 text-amber-600 shrink-0" />
+            <p className="text-sm text-amber-800">
+              You must be signed in as an authenticated shop owner to create and save jobs.
+            </p>
+          </div>
+          <Button to="/login" variant="primary" size="sm">
+            Sign In
+          </Button>
+        </div>
+      )}
+
+      {/* Submission Error Banner */}
+      {submitError && (
         <div
-          id="form-success-banner"
-          role="status"
-          aria-live="polite"
-          className="rounded-xl bg-emerald-50 border border-emerald-200 p-4 sm:p-5 flex items-start gap-3 shadow-xs animate-in fade-in duration-200"
+          id="form-error-banner"
+          role="alert"
+          aria-live="assertive"
+          className="rounded-xl bg-red-50 border border-red-200 p-4 sm:p-5 flex items-start gap-3 shadow-xs"
         >
-          <div className="p-1 rounded-full bg-emerald-100 text-emerald-700 shrink-0 mt-0.5">
-            <CheckCircle2 className="w-5 h-5" />
+          <div className="p-1 rounded-full bg-red-100 text-red-700 shrink-0 mt-0.5">
+            <AlertCircle className="w-5 h-5" />
           </div>
           <div>
-            <h2 className="text-sm font-semibold text-emerald-900">
-              Validation Passed
-            </h2>
-            <p className="mt-0.5 text-sm text-emerald-800 leading-relaxed">
-              {successMessage}
-            </p>
+            <h2 className="text-sm font-semibold text-red-900">Failed to Save Job</h2>
+            <p className="mt-0.5 text-sm text-red-800 leading-relaxed">{submitError}</p>
           </div>
         </div>
       )}
@@ -248,26 +294,22 @@ export default function CreateJob() {
                 </label>
                 <span className="text-xs text-slate-400">Required</span>
               </div>
-              <div className="relative">
-                <input
-                  type="text"
-                  id="customerName"
-                  name="customerName"
-                  value={formData.customerName}
-                  onChange={handleInputChange}
-                  autoComplete="name"
-                  placeholder="Enter customer's full name"
-                  aria-invalid={errors.customerName ? 'true' : 'false'}
-                  aria-describedby={
-                    errors.customerName ? 'customerName-error' : undefined
-                  }
-                  className={`w-full px-3.5 py-2.5 rounded-lg border text-sm text-slate-900 placeholder:text-slate-400 transition-colors bg-white focus:outline-none focus:ring-2 ${
-                    errors.customerName
-                      ? 'border-red-400 focus:border-red-500 focus:ring-red-200 bg-red-50/20'
-                      : 'border-slate-300 focus:border-blue-500 focus:ring-blue-100 hover:border-slate-400'
-                  }`}
-                />
-              </div>
+              <input
+                type="text"
+                id="customerName"
+                name="customerName"
+                value={formData.customerName}
+                onChange={handleInputChange}
+                autoComplete="name"
+                placeholder="Enter customer's full name"
+                aria-invalid={errors.customerName ? 'true' : 'false'}
+                aria-describedby={errors.customerName ? 'customerName-error' : undefined}
+                className={`w-full px-3.5 py-2.5 rounded-lg border text-sm text-slate-900 placeholder:text-slate-400 transition-colors bg-white focus:outline-none focus:ring-2 ${
+                  errors.customerName
+                    ? 'border-red-400 focus:border-red-500 focus:ring-red-200 bg-red-50/20'
+                    : 'border-slate-300 focus:border-blue-500 focus:ring-blue-100 hover:border-slate-400'
+                }`}
+              />
               {errors.customerName && (
                 <p
                   id="customerName-error"
@@ -304,9 +346,7 @@ export default function CreateJob() {
                   autoComplete="tel"
                   placeholder="Enter phone number"
                   aria-invalid={errors.phoneNumber ? 'true' : 'false'}
-                  aria-describedby={
-                    errors.phoneNumber ? 'phoneNumber-error' : undefined
-                  }
+                  aria-describedby={errors.phoneNumber ? 'phoneNumber-error' : undefined}
                   className={`w-full pl-9.5 pr-3.5 py-2.5 rounded-lg border text-sm text-slate-900 placeholder:text-slate-400 transition-colors bg-white focus:outline-none focus:ring-2 ${
                     errors.phoneNumber
                       ? 'border-red-400 focus:border-red-500 focus:ring-red-200 bg-red-50/20'
@@ -533,23 +573,21 @@ export default function CreateJob() {
                 </label>
                 <span className="text-xs text-slate-400">Optional</span>
               </div>
-              <div className="relative">
-                <input
-                  type="date"
-                  id="dueDate"
-                  name="dueDate"
-                  min={minDate}
-                  value={formData.dueDate}
-                  onChange={handleInputChange}
-                  aria-invalid={errors.dueDate ? 'true' : 'false'}
-                  aria-describedby={errors.dueDate ? 'dueDate-error' : undefined}
-                  className={`w-full px-3.5 py-2.5 rounded-lg border text-sm text-slate-900 placeholder:text-slate-400 transition-colors bg-white focus:outline-none focus:ring-2 ${
-                    errors.dueDate
-                      ? 'border-red-400 focus:border-red-500 focus:ring-red-200 bg-red-50/20'
-                      : 'border-slate-300 focus:border-blue-500 focus:ring-blue-100 hover:border-slate-400'
-                  }`}
-                />
-              </div>
+              <input
+                type="date"
+                id="dueDate"
+                name="dueDate"
+                min={minDate}
+                value={formData.dueDate}
+                onChange={handleInputChange}
+                aria-invalid={errors.dueDate ? 'true' : 'false'}
+                aria-describedby={errors.dueDate ? 'dueDate-error' : undefined}
+                className={`w-full px-3.5 py-2.5 rounded-lg border text-sm text-slate-900 placeholder:text-slate-400 transition-colors bg-white focus:outline-none focus:ring-2 ${
+                  errors.dueDate
+                    ? 'border-red-400 focus:border-red-500 focus:ring-red-200 bg-red-50/20'
+                    : 'border-slate-300 focus:border-blue-500 focus:ring-blue-100 hover:border-slate-400'
+                }`}
+              />
               {errors.dueDate ? (
                 <p
                   id="dueDate-error"
@@ -606,6 +644,7 @@ export default function CreateJob() {
             variant="outline"
             id="create-job-cancel-btn"
             onClick={() => navigate('/jobs')}
+            disabled={submitting}
             className="w-full sm:w-auto"
           >
             Cancel
@@ -615,9 +654,17 @@ export default function CreateJob() {
             type="submit"
             variant="primary"
             id="create-job-submit-btn"
+            disabled={submitting}
             className="w-full sm:w-auto"
           >
-            Create Job
+            {submitting ? (
+              <span className="flex items-center gap-2">
+                <Loader2 className="w-4 h-4 animate-spin" />
+                <span>Saving to Database...</span>
+              </span>
+            ) : (
+              <span>Create Job</span>
+            )}
           </Button>
         </div>
       </form>
