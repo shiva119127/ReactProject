@@ -1,7 +1,10 @@
 import { createClient } from '@supabase/supabase-js';
 
-const rawUrl = import.meta.env.VITE_SUPABASE_URL?.trim();
-const rawKey = import.meta.env.VITE_SUPABASE_ANON_KEY?.trim();
+const env = (typeof import.meta !== 'undefined' && import.meta.env) || {};
+const rawUrl = env.VITE_SUPABASE_URL?.trim();
+
+const rawKey = env.VITE_SUPABASE_ANON_KEY?.trim();
+
 
 // Verify that URL and key are provided and not default placeholders
 export const isSupabaseConfigured = Boolean(

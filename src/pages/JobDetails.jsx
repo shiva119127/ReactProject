@@ -16,6 +16,7 @@ import {
 import { getJobById } from '../services/jobs';
 import StatusBadge from '../components/ui/StatusBadge';
 import Button from '../components/ui/Button';
+import DesignProofsSection from '../components/proofs/DesignProofsSection';
 
 export default function JobDetails() {
   const { id } = useParams();
@@ -224,6 +225,9 @@ export default function JobDetails() {
               {job.requirements}
             </div>
           </section>
+
+          {/* Design Proofs Section */}
+          <DesignProofsSection jobId={job.id} ownerId={job.owner_id} />
 
           {/* Internal Notes (Print Shop Only) */}
           {job.internal_notes && (
