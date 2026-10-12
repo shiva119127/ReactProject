@@ -118,6 +118,7 @@ export async function getDashboardData() {
     total: jobs.length,
     awaitingProof: jobs.filter((j) => j.status === 'awaiting_proof').length,
     awaitingCustomer: jobs.filter((j) => j.status === 'awaiting_customer').length,
+    changesRequested: jobs.filter((j) => j.status === 'changes_requested').length,
     approved: jobs.filter((j) => j.status === 'approved').length,
   };
 
@@ -289,4 +290,425 @@ export async function getSignedProofUrl(storagePath, expiresIn = 3600) {
 
   return data.signedUrl;
 }
+
+// ---------------------------------------------------------------------------
+// Proof Submissions Management Services (Step 5)
+// ---------------------------------------------------------------------------
+
+/**
+ * Fetches all proof submissions for a job, ordered descending by creation date.
+ */
+export async function getProofSubmissions(jobId) {
+  if (!isSupabaseConfigured || !supabase) {
+    throw new Error('Supabase is not configured.');
+  }
+
+  if (!jobId) {
+    throw new Error('Job ID is required to fetch submissions.');
+  }
+
+  const { data, error } = await supabase
+    .from('proof_submissions')
+    .select('*')
+    .eq('job_id', jobId)
+    .order('created_at', { ascending: false });
+
+  if (error) {
+    if (error.code === 'PGRST205' || error.message?.includes('proof_submissions')) {
+      throw new Error(
+        "Database table 'proof_submissions' is not available. Please run the Step 5 database migration in your Supabase SQL Editor."
+      );
+    }
+    throw error;
+  }
+
+  return data || [];
+}
+
+/**
+ * Submits a selected proof version for customer review using the atomic database RPC.
+ * Atomically supersedes previous pending submissions, creates a new pending submission,
+ * and updates job status to 'awaiting_customer'.
+ */
+export async function submitProofForReview({ jobId, proofVersionId }) {
+  if (!isSupabaseConfigured || !supabase) {
+    throw new Error('Supabase is not configured. Please check your environment variables.');
+  }
+
+  if (!jobId || !proofVersionId) {
+    throw new Error('Both Job ID and Proof Version ID are required to submit a proof.');
+  }
+
+  const { data, error } = await supabase.rpc('submit_proof_for_review', {
+    p_job_id: jobId,
+    p_proof_version_id: proofVersionId,
+  });
+
+  if (error) {
+    if (
+      error.code === 'PGRST202' ||
+      error.code === '42883' ||
+      error.message?.includes('submit_proof_for_review')
+    ) {
+      throw new Error(
+        "Database function 'submit_proof_for_review' is not available. Please run the Step 5 database migration (20261011000002_create_proof_submissions.sql) in your Supabase SQL Editor."
+      );
+    }
+    throw new Error(error.message || 'Failed to submit design proof for review.');
+  }
+
+  return data;
+}
+
+// ---------------------------------------------------------------------------
+// Customer Review Links Services (Step 6)
+// ---------------------------------------------------------------------------
+
+/**
+ * Fetches all review links for a job (ordered by created_at DESC).
+ */
+export async function getProofReviewLinks(jobId) {
+  if (!isSupabaseConfigured || !supabase) {
+    throw new Error('Supabase is not configured.');
+  }
+
+  if (!jobId) {
+    throw new Error('Job ID is required to fetch review links.');
+  }
+
+  const { data, error } = await supabase
+    .from('proof_review_links')
+    .select('*')
+    .eq('job_id', jobId)
+    .order('created_at', { ascending: false });
+
+  if (error) {
+    if (error.code === 'PGRST205' || error.message?.includes('proof_review_links')) {
+      throw new Error(
+        "Database table 'proof_review_links' is not available. Please run the Step 6 database migration in your Supabase SQL Editor."
+      );
+    }
+    throw error;
+  }
+
+  return data || [];
+}
+
+/**
+ * Creates a cryptographically secure customer review link via atomic RPC.
+ * Automatically revokes any previous active review links for this job,
+ * hashes the token, and returns the raw token ONCE to the owner.
+ */
+export async function createProofReviewLink({ submissionId, expiresInDays = 7 }) {
+  if (!isSupabaseConfigured || !supabase) {
+    throw new Error('Supabase is not configured.');
+  }
+
+  if (!submissionId) {
+    throw new Error('Submission ID is required to generate a review link.');
+  }
+
+  const { data, error } = await supabase.rpc('create_proof_review_link', {
+    p_submission_id: submissionId,
+    p_expires_in_days: expiresInDays,
+  });
+
+  if (error) {
+    if (
+      error.code === 'PGRST202' ||
+      error.code === '42883' ||
+      error.message?.includes('create_proof_review_link')
+    ) {
+      throw new Error(
+        "Database function 'create_proof_review_link' is not available. Please run the Step 6 database migration (20261011000003_create_proof_review_links.sql) in your Supabase SQL Editor."
+      );
+    }
+    throw new Error(error.message || 'Failed to generate review link.');
+  }
+
+  return data;
+}
+
+/**
+ * Explicitly revokes an active customer review link.
+ */
+export async function revokeProofReviewLink(linkId) {
+  if (!isSupabaseConfigured || !supabase) {
+    throw new Error('Supabase is not configured.');
+  }
+
+  if (!linkId) {
+    throw new Error('Review Link ID is required.');
+  }
+
+  const { data, error } = await supabase.rpc('revoke_proof_review_link', {
+    p_link_id: linkId,
+  });
+
+  if (error) {
+    if (
+      error.code === 'PGRST202' ||
+      error.code === '42883' ||
+      error.message?.includes('revoke_proof_review_link')
+    ) {
+      throw new Error(
+        "Database function 'revoke_proof_review_link' is not available. Please run the Step 6 database migration in your Supabase SQL Editor."
+      );
+    }
+    throw new Error(error.message || 'Failed to revoke review link.');
+  }
+
+  return data;
+}
+
+/**
+ * Validates a customer's raw review token against its stored hash.
+ * Returns safe customer-facing metadata only if the link is active, unrevoked, unexpired,
+ * and the submission is still pending_review.
+ */
+export async function validateCustomerReviewToken(rawToken) {
+  if (!isSupabaseConfigured || !supabase) {
+    throw new Error('Supabase is not configured.');
+  }
+
+  if (!rawToken || !rawToken.trim()) {
+    return {
+      valid: false,
+      status: 'invalid',
+      error: 'A review token is required.',
+    };
+  }
+
+  const { data, error } = await supabase.rpc('validate_customer_review_token', {
+    p_raw_token: rawToken.trim(),
+  });
+
+  if (error) {
+    if (
+      error.code === 'PGRST202' ||
+      error.code === '42883' ||
+      error.message?.includes('validate_customer_review_token')
+    ) {
+      throw new Error(
+        "Database function 'validate_customer_review_token' is not available. Please run the Step 6 database migration in your Supabase SQL Editor."
+      );
+    }
+    throw new Error(error.message || 'Failed to validate customer review token.');
+  }
+
+  return data;
+}
+
+/**
+ * Generates a short-lived signed URL for a customer viewing a verified proof.
+ */
+export async function getCustomerProofSignedUrl(storagePath, expiresIn = 3600) {
+  if (!isSupabaseConfigured || !supabase) {
+    throw new Error('Supabase is not configured.');
+  }
+
+  if (!storagePath) {
+    throw new Error('Storage path is required.');
+  }
+
+  const { data, error } = await supabase.storage
+    .from('proof-files')
+    .createSignedUrl(storagePath, expiresIn);
+
+  if (error) {
+    throw new Error(`Unable to generate temporary viewing link: ${error.message}`);
+  }
+
+  return data.signedUrl;
+}
+
+/**
+ * Records a customer's proof decision (approved or changes_requested) atomically.
+ * Calls RPC 'record_customer_proof_decision'.
+ * Validates the raw token, ensures no duplicate decision, records proof decision in proof_decisions,
+ * and updates job status to 'approved' or 'changes_requested'.
+ */
+export async function recordCustomerProofDecision({ token, decision, feedback = null }) {
+  if (!isSupabaseConfigured || !supabase) {
+    throw new Error('Supabase is not configured.');
+  }
+
+  if (!token || !token.trim()) {
+    throw new Error('Review token is required.');
+  }
+
+  if (!decision || !['approved', 'changes_requested'].includes(decision)) {
+    throw new Error('Invalid decision. Must be "approved" or "changes_requested".');
+  }
+
+  const trimmedFeedback = feedback ? feedback.trim() : null;
+
+  if (decision === 'changes_requested') {
+    if (!trimmedFeedback) {
+      throw new Error('Please provide feedback describing what changes you would like made.');
+    }
+    if (trimmedFeedback.length > 2000) {
+      throw new Error('Revision feedback cannot exceed 2,000 characters.');
+    }
+  }
+
+  const { data, error } = await supabase.rpc('record_customer_proof_decision', {
+    p_raw_token: token.trim(),
+    p_decision: decision,
+    p_feedback: trimmedFeedback,
+  });
+
+  if (error) {
+    if (
+      error.code === 'PGRST202' ||
+      error.code === '42883' ||
+      error.message?.includes('record_customer_proof_decision')
+    ) {
+      throw new Error(
+        "Database function 'record_customer_proof_decision' is not available. Please run the Step 7 database migration in your Supabase SQL Editor."
+      );
+    }
+    throw new Error(error.message || 'Failed to record proof decision.');
+  }
+
+  return data;
+}
+
+/**
+ * Fetches proof decisions for a specific job (owner only via RLS).
+ * Includes submission and proof version info.
+ */
+export async function getProofDecisions(jobId) {
+  if (!isSupabaseConfigured || !supabase) {
+    throw new Error('Supabase is not configured.');
+  }
+
+  if (!jobId) {
+    throw new Error('Job ID is required.');
+  }
+
+  const { data, error } = await supabase
+    .from('proof_decisions')
+    .select(`
+      id,
+      submission_id,
+      job_id,
+      proof_version_id,
+      decision,
+      feedback,
+      created_at,
+      proof_versions:proof_version_id (
+        id,
+        version_number,
+        original_filename
+      )
+    `)
+    .eq('job_id', jobId)
+    .order('created_at', { ascending: false });
+
+  if (error) {
+    throw new Error(`Failed to load proof decisions: ${error.message}`);
+  }
+
+  return data || [];
+}
+
+/**
+ * Fetches consolidated revision history for a job.
+ * Combines proof versions, latest submission statuses, and customer decisions/feedback.
+ * Uses get_job_revision_history RPC if available, or synthesizes from database queries.
+ */
+export async function getRevisionHistory(jobId) {
+  if (!isSupabaseConfigured || !supabase) {
+    throw new Error('Supabase is not configured.');
+  }
+
+  if (!jobId) {
+    throw new Error('Job ID is required.');
+  }
+
+  // 1. Try RPC first
+  const { data: rpcData, error: rpcError } = await supabase.rpc('get_job_revision_history', {
+    p_job_id: jobId,
+  });
+
+  if (!rpcError && Array.isArray(rpcData)) {
+    return rpcData.map((item) => ({
+      id: item.id,
+      jobId: item.job_id,
+      versionNumber: item.version_number,
+      originalFilename: item.original_filename,
+      mimeType: item.mime_type,
+      fileSize: item.file_size,
+      storagePath: item.storage_path,
+      createdAt: item.created_at,
+      isCurrent: Boolean(item.is_current),
+      submission: item.submission
+        ? {
+            id: item.submission.id,
+            status: item.submission.status,
+            createdAt: item.submission.created_at,
+          }
+        : null,
+      decision: item.decision
+        ? {
+            id: item.decision.id,
+            decision: item.decision.decision,
+            feedback: item.decision.feedback,
+            createdAt: item.decision.created_at,
+          }
+        : null,
+    }));
+  }
+
+  // 2. Fallback to client-side synthesis from real database records
+  const [versions, submissions, decisions] = await Promise.all([
+    getProofVersions(jobId),
+    getProofSubmissions(jobId),
+    getProofDecisions(jobId),
+  ]);
+
+  if (!versions || versions.length === 0) {
+    return [];
+  }
+
+  const maxVersion = Math.max(...versions.map((v) => v.version_number));
+
+  return versions.map((version) => {
+    const versionSubmissions = submissions.filter((s) => s.proof_version_id === version.id);
+    const latestSubmission = versionSubmissions[0] || null;
+
+    const versionDecisions = decisions.filter((d) => d.proof_version_id === version.id);
+    const latestDecision = versionDecisions[0] || null;
+
+    return {
+      id: version.id,
+      jobId: version.job_id,
+      versionNumber: version.version_number,
+      originalFilename: version.original_filename,
+      mimeType: version.mime_type,
+      fileSize: version.file_size,
+      storagePath: version.storage_path,
+      createdAt: version.created_at,
+      isCurrent: version.version_number === maxVersion,
+      submission: latestSubmission
+        ? {
+            id: latestSubmission.id,
+            status: latestSubmission.status,
+            createdAt: latestSubmission.created_at,
+          }
+        : null,
+      decision: latestDecision
+        ? {
+            id: latestDecision.id,
+            decision: latestDecision.decision,
+            feedback: latestDecision.feedback,
+            createdAt: latestDecision.created_at,
+          }
+        : null,
+    };
+  });
+}
+
+
 

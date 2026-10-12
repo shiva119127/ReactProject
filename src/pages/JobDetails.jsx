@@ -12,28 +12,74 @@ import {
   ShieldAlert,
   FileText,
   Sparkles,
+  Send,
+  CheckCircle2,
+  RotateCcw,
+  Upload,
 } from 'lucide-react';
-import { getJobById } from '../services/jobs';
+import {
+  getJobById,
+  getProofVersions,
+  getProofSubmissions,
+  getProofDecisions,
+  getRevisionHistory,
+} from '../services/jobs';
 import StatusBadge from '../components/ui/StatusBadge';
 import Button from '../components/ui/Button';
 import DesignProofsSection from '../components/proofs/DesignProofsSection';
+import SubmitForReviewSection from '../components/proofs/SubmitForReviewSection';
+import CustomerReviewLinkSection from '../components/proofs/CustomerReviewLinkSection';
+import CustomerDecisionSection from '../components/proofs/CustomerDecisionSection';
+import RevisionHistorySection from '../components/proofs/RevisionHistorySection';
 
 export default function JobDetails() {
   const { id } = useParams();
   const [job, setJob] = useState(null);
+  const [proofs, setProofs] = useState([]);
+  const [pendingSubmission, setPendingSubmission] = useState(null);
+  const [decisions, setDecisions] = useState([]);
+  const [loadingDecisions, setLoadingDecisions] = useState(Boolean(id));
+  const [revisions, setRevisions] = useState([]);
+  const [loadingRevisions, setLoadingRevisions] = useState(Boolean(id));
+  const [uploadDrawerOpen, setUploadDrawerOpen] = useState(false);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState(null);
+
+  const fetchProofs = React.useCallback(async () => {
+    if (!id) return;
+    try {
+      const [data, revData] = await Promise.all([
+        getProofVersions(id),
+        getRevisionHistory(id).catch(() => []),
+      ]);
+      setProofs(data);
+      setRevisions(revData);
+    } catch (err) {
+      console.error('Failed to load proofs in JobDetails:', err);
+    }
+  }, [id]);
 
   useEffect(() => {
     let isMounted = true;
 
-    async function fetchJob() {
+    async function loadData() {
       setLoading(true);
       setError(null);
       try {
-        const data = await getJobById(id);
+        const [jobData, submissionsData, decisionsData, revisionsData] = await Promise.all([
+          getJobById(id),
+          getProofSubmissions(id).catch(() => []),
+          getProofDecisions(id).catch(() => []),
+          getRevisionHistory(id).catch(() => []),
+        ]);
         if (isMounted) {
-          setJob(data);
+          setJob(jobData);
+          const active = submissionsData.find((s) => s.status === 'pending_review') || null;
+          setPendingSubmission(active);
+          setDecisions(decisionsData);
+          setLoadingDecisions(false);
+          setRevisions(revisionsData);
+          setLoadingRevisions(false);
         }
       } catch (err) {
         if (isMounted) {
@@ -47,13 +93,43 @@ export default function JobDetails() {
     }
 
     if (id) {
-      fetchJob();
+      loadData();
     }
 
     return () => {
       isMounted = false;
     };
   }, [id]);
+
+  const handleJobUpdated = async (updatedJob) => {
+    setJob((prev) => ({
+      ...prev,
+      ...updatedJob,
+    }));
+    try {
+      const [subs, decs, revs, prfs] = await Promise.all([
+        getProofSubmissions(id).catch(() => []),
+        getProofDecisions(id).catch(() => []),
+        getRevisionHistory(id).catch(() => []),
+        getProofVersions(id).catch(() => []),
+      ]);
+      const active = subs.find((s) => s.status === 'pending_review') || null;
+      setPendingSubmission(active);
+      setDecisions(decs);
+      setRevisions(revs);
+      setProofs(prfs);
+    } catch (e) {
+      console.error('Failed to refresh submissions/decisions after update:', e);
+    }
+  };
+
+  const handleRequestUpload = () => {
+    setUploadDrawerOpen(true);
+    const sectionEl = document.getElementById('design-proofs-section');
+    if (sectionEl) {
+      sectionEl.scrollIntoView({ behavior: 'smooth' });
+    }
+  };
 
   if (loading) {
     return (
@@ -227,7 +303,49 @@ export default function JobDetails() {
           </section>
 
           {/* Design Proofs Section */}
-          <DesignProofsSection jobId={job.id} ownerId={job.owner_id} />
+          <DesignProofsSection
+            jobId={job.id}
+            ownerId={job.owner_id}
+            jobStatus={job.status}
+            latestRevisionFeedback={
+              decisions.find((d) => d.decision === 'changes_requested' && d.feedback)?.feedback || null
+            }
+            onProofsLoaded={setProofs}
+            onProofUploaded={fetchProofs}
+            isUploadOpen={uploadDrawerOpen}
+            onToggleUpload={setUploadDrawerOpen}
+          />
+
+          {/* Submit for Customer Review Section */}
+          <SubmitForReviewSection
+            job={job}
+            proofs={proofs}
+            decisions={decisions}
+            onJobUpdated={handleJobUpdated}
+            onRequestUpload={handleRequestUpload}
+          />
+
+          {/* Customer Review Link Section (Step 6) */}
+          <CustomerReviewLinkSection
+            job={job}
+            pendingSubmission={pendingSubmission}
+          />
+
+          {/* Customer Proof Decision Section (Step 7) */}
+          <CustomerDecisionSection
+            job={job}
+            decisions={decisions}
+            loading={loadingDecisions}
+            proofs={proofs}
+          />
+
+          {/* Revision History Section (Step 8) */}
+          <RevisionHistorySection
+            job={job}
+            revisions={revisions}
+            loading={loadingRevisions}
+            onUploadRevisedProof={handleRequestUpload}
+          />
 
           {/* Internal Notes (Print Shop Only) */}
           {job.internal_notes && (
@@ -301,16 +419,62 @@ export default function JobDetails() {
             </div>
           </section>
 
-          {/* Next Steps Card */}
-          <div className="p-5 rounded-2xl bg-blue-50/60 border border-blue-100 text-blue-900 text-xs space-y-2">
-            <div className="flex items-center gap-2 font-semibold text-blue-800">
-              <Sparkles className="w-4 h-4 text-blue-600" />
-              <span>Next Production Phase</span>
+          {/* Customer Review Status & Next Steps Card */}
+          {job.status === 'awaiting_customer' ? (
+            <div className="p-5 rounded-2xl bg-blue-50/70 border border-blue-200 text-blue-900 text-xs space-y-2.5">
+              <div className="flex items-center gap-2 font-bold text-blue-800">
+                <Send className="w-4 h-4 text-blue-600" />
+                <span>Awaiting Customer Review</span>
+              </div>
+              <p className="leading-relaxed text-blue-700">
+                A design proof has been submitted and is currently in client review.
+              </p>
+              <div className="pt-2 border-t border-blue-200/60 text-[11px] text-blue-800/90 font-medium">
+                <strong>Important:</strong> This order is <em>not approved yet</em>. Production will begin only after customer approval is explicitly recorded.
+              </div>
             </div>
-            <p className="leading-relaxed text-blue-700">
-              Initial artwork proofing and customer review links will be enabled in upcoming steps.
-            </p>
-          </div>
+          ) : job.status === 'approved' ? (
+            <div className="p-5 rounded-2xl bg-emerald-50/70 border border-emerald-200 text-emerald-900 text-xs space-y-2">
+              <div className="flex items-center gap-2 font-bold text-emerald-800">
+                <CheckCircle2 className="w-4 h-4 text-emerald-600" />
+                <span>Customer Approved</span>
+              </div>
+              <p className="leading-relaxed text-emerald-700">
+                The customer has officially approved the design proof. This order is cleared for print production.
+              </p>
+            </div>
+          ) : job.status === 'changes_requested' ? (
+            <div className="p-5 rounded-2xl bg-rose-50/70 border border-rose-200 text-rose-900 text-xs space-y-3">
+              <div className="flex items-center gap-2 font-bold text-rose-800">
+                <RotateCcw className="w-4 h-4 text-rose-600" />
+                <span>Changes Requested</span>
+              </div>
+              <p className="leading-relaxed text-rose-700">
+                The customer has requested revisions on the submitted proof. Review their feedback below and upload a revised proof.
+              </p>
+              <Button
+                type="button"
+                variant="primary"
+                size="sm"
+                icon={Upload}
+                onClick={handleRequestUpload}
+                className="w-full bg-rose-600 hover:bg-rose-700 text-white"
+                id="sidebar-upload-revised-proof-btn"
+              >
+                Upload Revised Proof
+              </Button>
+            </div>
+          ) : (
+            <div className="p-5 rounded-2xl bg-slate-50 border border-slate-200 text-slate-800 text-xs space-y-2">
+              <div className="flex items-center gap-2 font-bold text-slate-800">
+                <Sparkles className="w-4 h-4 text-blue-600" />
+                <span>Proofing Workflow</span>
+              </div>
+              <p className="leading-relaxed text-slate-600">
+                Upload design artwork and submit for customer review. The customer must approve the proof before production starts.
+              </p>
+            </div>
+          )}
         </div>
       </div>
     </div>

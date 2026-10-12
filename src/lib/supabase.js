@@ -1,6 +1,9 @@
 import { createClient } from '@supabase/supabase-js';
 
-const env = (typeof import.meta !== 'undefined' && import.meta.env) || {};
+const env =
+  (typeof import.meta !== 'undefined' && import.meta.env) ||
+  (typeof process !== 'undefined' && process.env) ||
+  {};
 const rawUrl = env.VITE_SUPABASE_URL?.trim();
 
 const rawKey = env.VITE_SUPABASE_ANON_KEY?.trim();

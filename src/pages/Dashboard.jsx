@@ -10,6 +10,7 @@ import {
   ArrowRight,
   AlertCircle,
   Lock,
+  RotateCcw,
 } from 'lucide-react';
 import StatCard from '../components/ui/StatCard';
 import EmptyState from '../components/ui/EmptyState';
@@ -25,6 +26,7 @@ export default function Dashboard() {
     total: 0,
     awaitingProof: 0,
     awaitingCustomer: 0,
+    changesRequested: 0,
     approved: 0,
   });
   const [recentJobs, setRecentJobs] = useState([]);
@@ -85,6 +87,15 @@ export default function Dashboard() {
       badgeVariant: 'blue',
       description: 'Proofs out for client review & feedback',
       icon: Send,
+    },
+    {
+      id: 'stat-changes-requested',
+      title: 'Changes Requested',
+      value: loading ? '...' : String(stats.changesRequested || 0),
+      badgeText: isConfigured && user ? 'Revisions' : 'Setup Req',
+      badgeVariant: 'rose',
+      description: 'Customer requested design revisions',
+      icon: RotateCcw,
     },
     {
       id: 'stat-approved',
@@ -154,7 +165,7 @@ export default function Dashboard() {
         <h2 id="stats-heading" className="sr-only">
           Job Statistics Overview
         </h2>
-        <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4 sm:gap-5">
+        <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-5 gap-4 sm:gap-5">
           {statCardsData.map((stat) => (
             <StatCard
               key={stat.id}

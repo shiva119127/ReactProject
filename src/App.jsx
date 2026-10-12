@@ -8,6 +8,7 @@ import Jobs from './pages/Jobs';
 import CreateJob from './pages/CreateJob';
 import JobDetails from './pages/JobDetails';
 import Login from './pages/Login';
+import CustomerProofReview from './pages/CustomerProofReview';
 import NotFound from './pages/NotFound';
 
 export default function App() {
@@ -15,6 +16,10 @@ export default function App() {
     <BrowserRouter>
       <AuthProvider>
         <Routes>
+          {/* Public customer-facing proof review route (no owner layout or auth) */}
+          <Route path="review/:token" element={<CustomerProofReview />} />
+
+          {/* Authenticated shop owner application routes */}
           <Route path="/" element={<AppLayout />}>
             <Route index element={<Dashboard />} />
             <Route path="jobs" element={<Jobs />} />

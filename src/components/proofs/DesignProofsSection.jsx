@@ -12,6 +12,8 @@ import {
   Sparkles,
   Plus,
   Eye,
+  MessageSquare,
+  RotateCcw,
 } from 'lucide-react';
 import Button from '../ui/Button';
 import {
@@ -30,14 +32,28 @@ function formatFileSize(bytes) {
   return parseFloat((bytes / Math.pow(k, i)).toFixed(1)) + ' ' + sizes[i];
 }
 
-export default function DesignProofsSection({ jobId, ownerId }) {
+export default function DesignProofsSection({
+  jobId,
+  ownerId,
+  jobStatus,
+  latestRevisionFeedback,
+  onProofsLoaded,
+  onProofUploaded,
+  isUploadOpen: controlledUploadOpen,
+  onToggleUpload: setControlledUploadOpen,
+}) {
   const { user } = useAuth();
+  const isChangesRequested = jobStatus === 'changes_requested';
   const [proofs, setProofs] = useState([]);
   const [loading, setLoading] = useState(Boolean(jobId));
   const [loadError, setLoadError] = useState(null);
 
-  // Upload form state
-  const [isUploadOpen, setIsUploadOpen] = useState(false);
+  // Upload form state (controlled or uncontrolled)
+  const [internalUploadOpen, setInternalUploadOpen] = useState(false);
+  const isUploadOpen =
+    controlledUploadOpen !== undefined ? controlledUploadOpen : internalUploadOpen;
+  const setIsUploadOpen = setControlledUploadOpen || setInternalUploadOpen;
+
   const [selectedFile, setSelectedFile] = useState(null);
   const [fileValidationError, setFileValidationError] = useState('');
   const [uploading, setUploading] = useState(false);
@@ -58,12 +74,15 @@ export default function DesignProofsSection({ jobId, ownerId }) {
     try {
       const data = await getProofVersions(jobId);
       setProofs(data);
+      if (onProofsLoaded) {
+        onProofsLoaded(data);
+      }
     } catch (err) {
       setLoadError(err.message || 'Failed to load proof versions.');
     } finally {
       setLoading(false);
     }
-  }, [jobId]);
+  }, [jobId, onProofsLoaded]);
 
   useEffect(() => {
     let ignore = false;
@@ -74,6 +93,9 @@ export default function DesignProofsSection({ jobId, ownerId }) {
         if (!ignore) {
           setProofs(data);
           setLoading(false);
+          if (onProofsLoaded) {
+            onProofsLoaded(data);
+          }
         }
       })
       .catch((err) => {
@@ -86,7 +108,7 @@ export default function DesignProofsSection({ jobId, ownerId }) {
     return () => {
       ignore = true;
     };
-  }, [jobId]);
+  }, [jobId, onProofsLoaded]);
 
 
   // Handle file selection
@@ -163,6 +185,9 @@ export default function DesignProofsSection({ jobId, ownerId }) {
 
       // Refresh proof list from database
       await loadProofs();
+      if (onProofUploaded) {
+        onProofUploaded(newVersion);
+      }
     } catch (err) {
       setUploadError(err.message || 'Failed to upload proof. Please try again.');
     } finally {
@@ -192,6 +217,7 @@ export default function DesignProofsSection({ jobId, ownerId }) {
 
   return (
     <section
+      id="design-proofs-section"
       aria-labelledby="design-proofs-heading"
       className="bg-white rounded-2xl border border-slate-200/90 shadow-xs p-6 space-y-6"
     >
@@ -219,15 +245,15 @@ export default function DesignProofsSection({ jobId, ownerId }) {
             type="button"
             variant="outline"
             size="sm"
-            icon={Plus}
+            icon={isChangesRequested ? RotateCcw : Plus}
             onClick={() => {
               setIsUploadOpen(true);
               setUploadSuccess('');
               setUploadError('');
             }}
-            id="upload-new-version-btn"
+            id={isChangesRequested ? 'upload-revised-proof-btn' : 'upload-new-version-btn'}
           >
-            Upload New Version
+            {isChangesRequested ? 'Upload Revised Proof' : 'Upload New Version'}
           </Button>
         )}
       </div>
@@ -268,11 +294,18 @@ export default function DesignProofsSection({ jobId, ownerId }) {
         <div className="bg-slate-50/80 rounded-2xl border border-slate-200/90 p-5 sm:p-6 space-y-4">
           <div className="flex items-center justify-between">
             <div>
-              <h3 className="text-sm font-bold text-slate-900">
-                {proofs.length === 0 ? 'Upload Initial Proof' : 'Upload Revised Proof Version'}
+              <h3
+                className="text-sm font-bold text-slate-900"
+                id="upload-revised-proof-heading"
+              >
+                {isChangesRequested
+                  ? 'Upload Revised Proof'
+                  : proofs.length === 0
+                  ? 'Upload Initial Proof'
+                  : 'Upload Revised Proof Version'}
               </h3>
               <p className="text-xs text-slate-500 mt-0.5">
-                Supported formats: PDF, PNG, JPEG (Max 20 MB). Will be assigned the next version number.
+                Supported formats: PDF, PNG, JPEG (Max 20 MB). Will be assigned the next sequential version number.
               </p>
             </div>
             <button
@@ -300,6 +333,22 @@ export default function DesignProofsSection({ jobId, ownerId }) {
             <div className="p-3.5 rounded-xl bg-red-50 border border-red-200 text-xs text-red-700 flex items-center gap-2">
               <AlertCircle className="w-4 h-4 text-red-600 shrink-0" />
               <span>{uploadError}</span>
+            </div>
+          )}
+
+          {/* Customer Revision Feedback Notice if uploading revised proof */}
+          {isChangesRequested && latestRevisionFeedback && (
+            <div
+              id="upload-customer-feedback-notice"
+              className="p-4 rounded-xl bg-rose-50/80 border border-rose-200 text-xs space-y-1.5"
+            >
+              <div className="flex items-center gap-1.5 font-bold uppercase tracking-wider text-rose-800">
+                <MessageSquare className="w-4 h-4 text-rose-600" />
+                <span>Customer Revision Request</span>
+              </div>
+              <p className="text-slate-800 font-medium whitespace-pre-wrap leading-relaxed">
+                {latestRevisionFeedback}
+              </p>
             </div>
           )}
 
@@ -403,7 +452,7 @@ export default function DesignProofsSection({ jobId, ownerId }) {
                   ) : (
                     <span className="flex items-center gap-1.5">
                       <Upload className="w-4 h-4" />
-                      <span>Upload Proof</span>
+                      <span>{isChangesRequested ? 'Upload Revised Proof' : 'Upload Proof'}</span>
                     </span>
                   )}
                 </Button>
