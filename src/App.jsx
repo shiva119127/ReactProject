@@ -17,7 +17,7 @@ export default function App() {
       <AuthProvider>
         <Routes>
           {/* Public customer-facing proof review route (no owner layout or auth) */}
-          <Route path="review/:token" element={<CustomerProofReview />} />
+          <Route path="/review/:token" element={<CustomerProofReview />} />
 
           {/* Authenticated shop owner application routes */}
           <Route path="/" element={<AppLayout />}>
