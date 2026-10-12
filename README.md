@@ -98,44 +98,6 @@ ProofLoop relies on a relational PostgreSQL schema secured by Supabase Row Level
 
 ---
 
-## 🚀 Getting Started
-
-### 1. Prerequisites
-- **Node.js**: v18.0.0 or higher
-- **npm**: v9.0.0 or higher
-- A **Supabase** project ([supabase.com](https://supabase.com))
-
-### 2. Clone and Install
-```bash
-git clone https://github.com/shiva119127/ReactProject.git
-cd ReactProject
-npm install
-```
-
-### 3. Configure Environment Variables
-Create a `.env` file in the root directory:
-```env
-VITE_SUPABASE_URL=https://your-project-ref.supabase.co
-VITE_SUPABASE_ANON_KEY=your-supabase-anon-key
-```
-
-### 4. Initialize Database Schema
-1. Open your **Supabase Dashboard** -> **SQL Editor** -> **New Query**.
-2. Copy and execute the contents of [`supabase/full_schema_setup.sql`](supabase/full_schema_setup.sql).
-3. The script will automatically:
-   - Create tables, sequences, constraints, and triggers.
-   - Configure Row Level Security (RLS) policies.
-   - Set up the private `proof-files` storage bucket.
-   - Install all required atomic RPC functions.
-
-### 5. Run Development Server
-```bash
-npm run dev
-```
-Open [http://localhost:5173](http://localhost:5173) in your browser.
-
----
-
 ## 🧪 Available Scripts
 
 - `npm run dev`: Starts the Vite development server with Hot Module Replacement (HMR).
